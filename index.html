@@ -1,0 +1,991 @@
+<!DOCTYPE html>
+<!--
+  ═══════════════════════════════════════════════════════════════════════════
+   PWM SIMULATOR — Standalone Embeddable Demo
+  ═══════════════════════════════════════════════════════════════════════════
+   Purpose:
+     Self-contained interactive visualization of Pulse-Width Modulation (PWM).
+     Shows how a sinusoidal reference (fundamental) compared against a
+     triangular carrier produces a two-level switched PWM output, and how
+     that PWM output reconstructs the original sine on average.
+
+   Usage:
+     - Open directly in a browser, OR
+     - Embed via <iframe src="pwm-simulator-embed.html" width="100%" height="560">
+
+   Dependencies: none. Pure HTML + CSS + vanilla JS. No build step.
+
+   File layout:
+     1. <style>  — All CSS: base, layout, controls, responsive breakpoints.
+     2. <body>   — DOM: canvas + control panel + stats + action buttons.
+     3. <script> — Logic: state, drawing, resizing, event wiring.
+  ═══════════════════════════════════════════════════════════════════════════
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="color-scheme" content="light" />
+<meta name="theme-color" content="#ffffff" />
+<title>PWM Simulator</title>
+<style>
+  /* ═══════════════════════════════════════════════════════════════════════
+     1. BASE RESET & TYPOGRAPHY
+     ═══════════════════════════════════════════════════════════════════════ */
+  html, body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    background: transparent; /* Transparent so the iframe host page shows through */
+    color: #051464;
+  }
+  /* Border-box everywhere — prevents overflow inside narrow iframes */
+  *, *::before, *::after { box-sizing: border-box; }
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     2. MAIN CONTAINER (.pwm-sim)
+     The outer card that wraps canvas + controls.
+     ═══════════════════════════════════════════════════════════════════════ */
+  .pwm-sim {
+    background: #fff;
+    border: 1px solid #e2e8f4;
+    border-radius: 14px;
+    padding: 20px 28px;
+    margin: 8px auto;        /* Centered */
+    max-width: 1100px;       /* Comfortable width on big screens, still readable */
+    box-shadow: 0 4px 16px rgba(5,20,100,0.06);
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+
+  /* ───────────────────────────────────────────────────────────────────────
+     2.1 Scope time-base bar (preset buttons above the canvas)
+     ─────────────────────────────────────────────────────────────────────── */
+  .pwm-sim-timebase {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    background: #f0f4ff;
+    border: 1px solid #e2e8f4;
+    border-radius: 10px;
+    flex-wrap: wrap;
+  }
+  .pwm-sim-tb-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #6E8CC8;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-right: 4px;
+  }
+  .pwm-sim-tb-btn {
+    flex: 0 0 auto;
+    padding: 6px 12px;
+    border-radius: 7px;
+    border: 1px solid #d4ddf0;
+    background: #fff;
+    color: #051464;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .pwm-sim-tb-btn:hover {
+    border-color: #0014DC;
+    color: #0014DC;
+  }
+  .pwm-sim-tb-btn.active {
+    background: #0014DC;
+    color: #fff;
+    border-color: #0014DC;
+  }
+  /* When a lock toggle is active, the fixed-ms presets are visually dimmed */
+  .pwm-sim-tb-btn.disabled {
+    opacity: 0.35;
+    pointer-events: none;
+  }
+
+  /* Separator between the ms presets and the lock toggle */
+  .pwm-sim-tb-sep {
+    width: 1px;
+    align-self: stretch;
+    background: #d4ddf0;
+    margin: 0 8px;
+  }
+
+  /* ── Real CSS toggle switch (used for Lock 1 cycle) ──
+     Semantic: <label.switch> wrapping a hidden <input type="checkbox">
+     and a <span.slider> that becomes the visible track+knob. */
+  .pwm-sim-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #051464;
+    cursor: pointer;
+    user-select: none;
+  }
+  .pwm-sim-switch input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .pwm-sim-switch-track {
+    position: relative;
+    width: 38px;
+    height: 22px;
+    border-radius: 11px;
+    background: #d4ddf0;
+    transition: background 0.18s;
+    flex: 0 0 auto;
+  }
+  .pwm-sim-switch-track::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    transition: transform 0.18s;
+  }
+  .pwm-sim-switch input:checked + .pwm-sim-switch-track {
+    background: #0014DC;
+  }
+  .pwm-sim-switch input:checked + .pwm-sim-switch-track::after {
+    transform: translateX(16px);
+  }
+  .pwm-sim-switch input:focus-visible + .pwm-sim-switch-track {
+    outline: 2px solid #0014DC;
+    outline-offset: 2px;
+  }
+
+  /* ───────────────────────────────────────────────────────────────────────
+     2.2 Canvas — where the waveforms are drawn
+     ─────────────────────────────────────────────────────────────────────── */
+  .pwm-sim-canvas {
+    display: block;
+    width: 100%;
+    border-radius: 8px;
+    border: 1px solid #e2e8f4;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     3. BOTTOM SECTION — full-width controls panel directly under the canvas
+     Placed right below the waveform so each slider sits visually close to
+     the signal it affects. Action buttons are a bottom row, not a sidebar.
+     ═══════════════════════════════════════════════════════════════════════ */
+  .pwm-sim-bottom {
+    margin-top: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* ───────────────────────────────────────────────────────────────────────
+     3.1 Controls panel — three large slider rows
+     ─────────────────────────────────────────────────────────────────────── */
+  .pwm-sim-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 16px 18px;
+    background: #f8faff;
+    border-radius: 12px;
+    border: 1px solid #e2e8f4;
+  }
+
+  /* A single slider row: [label] [slider] [value readout] */
+  .pwm-sim-row { display: flex; align-items: center; gap: 14px; }
+
+  .pwm-sim-label {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 700; color: #051464;
+    min-width: 150px; flex-shrink: 0;
+  }
+
+  /* Colored dot next to each label — matches its waveform color */
+  .pwm-sim-dot {
+    width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+    box-shadow: 0 0 0 2px #fff, 0 1px 3px rgba(0,0,0,0.15);
+  }
+
+  /* ───────────────────────────────────────────────────────────────────────
+     3.2 Sliders — larger track + thumb for easy interaction
+     ─────────────────────────────────────────────────────────────────────── */
+  .pwm-sim-slider {
+    flex: 1;
+    -webkit-appearance: none; appearance: none;
+    height: 8px; border-radius: 5px;
+    background: #dbe4f5; outline: none;
+    cursor: pointer;
+  }
+  /* Thumb styles (WebKit/Blink) */
+  .pwm-sim-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 24px; height: 24px; border-radius: 50%;
+    cursor: pointer; border: 3px solid #fff;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+  }
+  /* Thumb styles (Firefox) */
+  .pwm-sim-slider::-moz-range-thumb {
+    width: 24px; height: 24px; border-radius: 50%;
+    cursor: pointer; border: 3px solid #fff;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+  }
+  /* Per-slider thumb colors — mirror the waveform colors in the canvas */
+  .pwm-sim-slider.fund::-webkit-slider-thumb    { background: #0014DC; } /* Blue  */
+  .pwm-sim-slider.carrier::-webkit-slider-thumb { background: #f59e0b; } /* Amber */
+  .pwm-sim-slider.mod::-webkit-slider-thumb     { background: #22c55e; } /* Green */
+  .pwm-sim-slider.fund::-moz-range-thumb        { background: #0014DC; }
+  .pwm-sim-slider.carrier::-moz-range-thumb     { background: #f59e0b; }
+  .pwm-sim-slider.mod::-moz-range-thumb         { background: #22c55e; }
+
+  /* Numeric readout — prominent so the user sees the live value while dragging */
+  .pwm-sim-value {
+    font-size: 14px; font-weight: 700; color: #051464;
+    min-width: 140px; text-align: right;
+    font-variant-numeric: tabular-nums;
+    background: #fff;
+    border: 1px solid #e2e8f4;
+    border-radius: 8px;
+    padding: 6px 10px;
+  }
+
+  /* ───────────────────────────────────────────────────────────────────────
+     3.3 Card title + slider color variants + derived V-cmd readout
+     Each card (Motor config / Drive output) reuses .pwm-sim-controls as
+     the panel and adds a small uppercase title at the top.
+     ─────────────────────────────────────────────────────────────────────── */
+  .pwm-sim-card-title {
+    font-size: 10px;
+    font-weight: 800;
+    color: #6E8CC8;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  /* Distinct thumb color for the amplitude control (purple) so it is
+     visually different from the Fundamental frequency slider (blue). */
+  .pwm-sim-slider.amp::-webkit-slider-thumb { background: #8b5cf6; }
+  .pwm-sim-slider.amp::-moz-range-thumb     { background: #8b5cf6; }
+
+  /* Region badge (Linear / Overmodulation / Square wave).
+     Shown as a small pill next to the amplitude slider readout. */
+  .pwm-sim-region {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 3px 7px;
+    border-radius: 5px;
+    background: #e6f7ee;
+    color: #166534;
+    white-space: nowrap;
+  }
+  .pwm-sim-region.over {
+    background: #fef3c7;
+    color: #92400e;
+  }
+  .pwm-sim-region.sq {
+    background: #fee2e2;
+    color: #991b1b;
+  }
+
+  /* ───────────────────────────────────────────────────────────────────────
+     3.4 Action buttons (Animate / Reset) — bottom row
+     ─────────────────────────────────────────────────────────────────────── */
+  .pwm-sim-actions { display: flex; gap: 10px; }
+  .pwm-sim-btn {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    gap: 6px; padding: 12px 16px; border-radius: 10px;
+    border: 1px solid #e2e8f4; background: #fff; color: #051464;
+    font-family: inherit; font-size: 14px; font-weight: 700;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .pwm-sim-btn:hover  { background: #f0f4ff; border-color: #0014DC; color: #0014DC; }
+  .pwm-sim-btn.active { background: #0014DC; color: #fff; border-color: #0014DC; }
+  .pwm-sim-btn.reset  { color: #6E8CC8; }
+  .pwm-sim-btn.reset:hover {
+    color: #c53030; border-color: #fecaca; background: #fff0f0;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     4. RESPONSIVE BREAKPOINTS
+     Mobile-first adjustments so the simulator stays usable inside narrow
+     iframes and feels native on touch devices.
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  /* ── Phone / narrow iframe (≤ 600px) ─────────────────────────────────
+     Layout: [label | value] on top row, slider full-width below.
+     Touch targets enlarged to comply with iOS/Android 44px guideline. */
+  @media (max-width: 600px) {
+    .pwm-sim          { padding: 12px 14px; margin: 4px; border-radius: 12px; max-width: 100%; }
+    .pwm-sim-timebase { padding: 6px 8px; gap: 4px; margin-bottom: 8px; }
+    .pwm-sim-tb-label { font-size: 10px; }
+    .pwm-sim-tb-btn   { padding: 6px 9px; font-size: 11px; }
+    .pwm-sim-bottom   { gap: 10px; margin-top: 10px; }
+    .pwm-sim-derived  { margin-left: 0; padding: 8px 10px; flex-wrap: wrap; }
+    .pwm-sim-region   { margin-left: 0; }
+
+    .pwm-sim-controls { padding: 12px; gap: 14px; border-radius: 10px; }
+
+    /* Row: label + value on same line; slider wraps below */
+    .pwm-sim-row {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      grid-template-areas:
+        "label value"
+        "slider slider";
+      gap: 6px 10px;
+      align-items: center;
+    }
+    .pwm-sim-label  { grid-area: label; min-width: 0; font-size: 14px; }
+    .pwm-sim-value  {
+      grid-area: value; min-width: 0;
+      justify-self: end;
+      font-size: 13px; padding: 5px 10px;
+      white-space: nowrap;
+    }
+
+    /* Bigger slider: taller track, larger thumb, extra top padding so the
+       full hit area is well above the minimum touch-target size. */
+    .pwm-sim-slider {
+      grid-area: slider;
+      width: 100%;
+      height: 12px;
+      margin: 4px 0 2px;
+      touch-action: pan-y;
+    }
+    .pwm-sim-slider::-webkit-slider-thumb {
+      width: 30px; height: 30px; border-width: 4px;
+    }
+    .pwm-sim-slider::-moz-range-thumb {
+      width: 30px; height: 30px; border-width: 4px;
+    }
+
+    /* Action buttons: full-width tap targets */
+    .pwm-sim-actions { gap: 8px; }
+    .pwm-sim-btn     { padding: 14px 10px; font-size: 14px; border-radius: 12px; }
+  }
+
+  /* ── Very narrow (≤ 380px) ──────────────────────────────────────────
+     Tighten remaining spacing for older / small phones. */
+  @media (max-width: 380px) {
+    .pwm-sim          { padding: 8px; margin: 3px; }
+    .pwm-sim-controls { padding: 10px; gap: 12px; }
+    .pwm-sim-label    { font-size: 13px; }
+    .pwm-sim-value    { font-size: 12px; padding: 4px 8px; }
+    .pwm-sim-btn      { padding: 13px 8px; font-size: 13px; }
+  }
+
+  /* ── Landscape phones (short height) ────────────────────────────────
+     When the viewport is wide-ish but very short, shrink the canvas so
+     the controls stay on screen without scrolling. */
+  @media (max-height: 480px) and (orientation: landscape) {
+    .pwm-sim        { padding: 8px; margin: 4px; }
+    .pwm-sim-bottom { margin-top: 8px; gap: 8px; }
+    .pwm-sim-controls { padding: 10px; gap: 10px; }
+  }
+
+  /* ── Hover-only enhancements ────────────────────────────────────────
+     Touch devices don't have :hover, so guard these to avoid "sticky" states */
+  @media (hover: none) {
+    .pwm-sim-btn:hover { background: #fff; border-color: #e2e8f4; color: #051464; }
+    .pwm-sim-btn.reset:hover { color: #6E8CC8; border-color: #e2e8f4; background: #fff; }
+    .pwm-sim-btn.active:hover { background: #0014DC; color: #fff; border-color: #0014DC; }
+  }
+</style>
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       DOM STRUCTURE
+       Single root .pwm-sim card containing:
+         - <canvas>             : waveform display
+         - .pwm-sim-bottom
+             .pwm-sim-controls  : 3 labeled sliders (full width, directly under canvas)
+             .pwm-sim-actions   : Animate / Reset buttons
+       Each slider sits directly under the waveform it modifies, so the
+       cause→effect relationship is visually immediate.
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <div class="pwm-sim" id="wrap">
+
+    <!-- ── Scope-style time base selector (above the canvas) ──
+         Fixed ms presets = TIME/DIV knob of a scope.
+         Lock 1 cycle toggle = forces the window to exactly one fundamental
+         cycle; while ON, the ms presets are visually disabled. -->
+    <div class="pwm-sim-timebase" id="tb">
+      <span class="pwm-sim-tb-label">Time base</span>
+      <button class="pwm-sim-tb-btn"        data-tb="ms:5"   type="button">5 ms</button>
+      <button class="pwm-sim-tb-btn"        data-tb="ms:20"  type="button">20 ms</button>
+      <button class="pwm-sim-tb-btn active" data-tb="ms:40"  type="button">40 ms</button>
+      <button class="pwm-sim-tb-btn"        data-tb="ms:100" type="button">100 ms</button>
+      <span class="pwm-sim-tb-sep"></span>
+      <label class="pwm-sim-switch">
+        <input type="checkbox" id="lock1" />
+        <span class="pwm-sim-switch-track"></span>
+        <span>Lock 1 cycle</span>
+      </label>
+    </div>
+
+    <!-- Canvas: drawn entirely by JS in draw() -->
+    <canvas class="pwm-sim-canvas" id="canvas"></canvas>
+
+    <div class="pwm-sim-bottom">
+
+      <!-- ════════════════════════════════════════════════════════════════
+           PWM signal construction controls
+           Three knobs: two for the fundamental (freq + amplitude) and one
+           for the carrier frequency. Carrier amplitude is fixed at ±1 as
+           the reference against which the fundamental is compared.
+           ════════════════════════════════════════════════════════════════ -->
+      <div class="pwm-sim-controls">
+
+        <!-- Fundamental frequency — rate of the reference sine wave -->
+        <div class="pwm-sim-row">
+          <label class="pwm-sim-label">
+            <span class="pwm-sim-dot" style="background:#0014DC"></span>
+            Fundamental
+          </label>
+          <input type="range" min="5" max="120" step="1" value="50"
+                 id="fund" class="pwm-sim-slider fund" />
+          <span class="pwm-sim-value" id="fundVal">50 Hz · 20.0 ms</span>
+        </div>
+
+        <!-- Fundamental amplitude, expressed as a percentage of the carrier
+             peak (100% means the sine just touches the carrier tops — the
+             edge of the linear region). Range 0..127% so the user can show
+             overmodulation and square-wave degeneracy. -->
+        <div class="pwm-sim-row">
+          <label class="pwm-sim-label">
+            <span class="pwm-sim-dot" style="background:#8b5cf6"></span>
+            Amplitude
+          </label>
+          <input type="range" min="0" max="127" step="1" value="80"
+                 id="amp" class="pwm-sim-slider amp" />
+          <span class="pwm-sim-value">
+            <span id="ampVal">80%</span>
+            &nbsp;<span class="pwm-sim-region" id="ampRegion">Linear</span>
+          </span>
+        </div>
+
+        <!-- Carrier frequency — switching rate of the triangle reference -->
+        <div class="pwm-sim-row">
+          <label class="pwm-sim-label">
+            <span class="pwm-sim-dot" style="background:#f59e0b"></span>
+            Carrier
+          </label>
+          <input type="range" min="300" max="5000" step="50" value="1500"
+                 id="carrier" class="pwm-sim-slider carrier" />
+          <span class="pwm-sim-value" id="carrierVal">1,500 Hz</span>
+        </div>
+      </div>
+
+      <!-- ── Action buttons (Animate / Reset) ────────────────────────── -->
+      <div class="pwm-sim-actions">
+        <button class="pwm-sim-btn"       id="btnAnim">▶ Animate</button>
+        <button class="pwm-sim-btn reset" id="btnReset">↺ Reset</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ═════════════════════════════════════════════════════════════════════════
+   PWM SIMULATOR — APPLICATION LOGIC
+   Wrapped in an IIFE so nothing leaks into the global scope.
+   ═════════════════════════════════════════════════════════════════════════ */
+(function () {
+
+  /* ───────────────────────────────────────────────────────────────────────
+     A. ELEMENT REFERENCES
+     ─────────────────────────────────────────────────────────────────────── */
+  var canvas = document.getElementById('canvas');
+  var wrap   = document.getElementById('wrap');
+  var ctx    = canvas.getContext('2d');
+
+  // Inputs
+  var fundEl    = document.getElementById('fund');
+  var ampEl     = document.getElementById('amp');
+  var carrierEl = document.getElementById('carrier');
+
+  // Slider value readouts
+  var fundValEl    = document.getElementById('fundVal');
+  var ampValEl     = document.getElementById('ampVal');
+  var ampRegionEl  = document.getElementById('ampRegion');
+  var carrierValEl = document.getElementById('carrierVal');
+
+  // Lock 1 cycle toggle switch
+  var lockEl = document.getElementById('lock1');
+
+  // Buttons
+  var btnAnim  = document.getElementById('btnAnim');
+  var btnReset = document.getElementById('btnReset');
+
+  /* ───────────────────────────────────────────────────────────────────────
+     B. STATE — pure PWM signal-construction model (no motor context)
+     - fund    : fundamental (reference sine) frequency, Hz
+     - modAmp  : fundamental amplitude a.k.a. modulation index m_a = V_sine/V_tri
+                 Range 0..1.27:
+                   • 0..1    → Linear region
+                   • 1..1.27 → Overmodulation (harmonics appear)
+                   • ≥ 4/π   → Square-wave degeneracy
+     - carrier : carrier (triangle) frequency, Hz. Amplitude is fixed at ±1.
+     ─────────────────────────────────────────────────────────────────────── */
+  var state = {
+    fund:     50,
+    modAmp:   0.80,
+    carrier:  1500,
+    animated: false,
+    timebase: 'ms:40',
+    lastMsTb: 'ms:40'
+  };
+  var phase = 0;      // Normalized phase offset [0..1] used when animating
+  var raf   = null;   // requestAnimationFrame handle
+  var canvasH = 220;  // Current canvas height in CSS pixels (recomputed on resize)
+
+  /* ───────────────────────────────────────────────────────────────────────
+     C. HELPERS
+     ─────────────────────────────────────────────────────────────────────── */
+
+  // Pick a canvas height based on viewport width (iframe-friendly).
+  function computeCanvasH() {
+    var vw = window.innerWidth;
+    var vh = window.innerHeight;
+    if (vh < 480 && vw > vh) return 220; // Landscape phone
+    if (vw < 380) return 280;
+    if (vw < 600) return 320;
+    if (vw < 860) return 350;
+    return 380;
+  }
+
+  // Compute the effective time window (seconds). The preset is semantic,
+  // so it auto-adapts to whatever Fundamental / Switching freq is currently
+  // selected. This is what lets "1 period" always show exactly one sine
+  // cycle regardless of frequency.
+  function computeWindowSec() {
+    if (state.timebase === 'zoom') {
+      return 3 / state.carrier;            // ~3 carrier periods → see PWM pulses
+    }
+    if (state.timebase.indexOf('cycles:') === 0) {
+      var n = parseInt(state.timebase.split(':')[1], 10);
+      return n / state.fund;               // N fundamental cycles (adaptive)
+    }
+    if (state.timebase.indexOf('ms:') === 0) {
+      var ms = parseInt(state.timebase.split(':')[1], 10);
+      return ms / 1000;                    // Fixed absolute window (scope-like)
+    }
+    return 0.04;
+  }
+
+  // Refresh every slider readout from current state.
+  // Each value box now shows the primary unit + its most relevant derived
+  // value, so the stats grid is no longer needed.
+  // Classify the modulation region based on the current amplitude m_a.
+  // 4/π ≈ 1.2732 is the theoretical max fundamental of a square wave
+  // referenced to a unit-amplitude carrier.
+  function regionFor(ma) {
+    if (ma >= 4 / Math.PI) return { label: 'Square wave',   cls: 'sq'   };
+    if (ma > 1)            return { label: 'Overmodulation', cls: 'over' };
+    return { label: 'Linear', cls: '' };
+  }
+
+  function updateLabels() {
+    var periodMs = 1000 / state.fund;
+    fundValEl.textContent    = state.fund + ' Hz · ' + periodMs.toFixed(1) + ' ms';
+    carrierValEl.textContent = state.carrier.toLocaleString() + ' Hz';
+
+    ampValEl.textContent = Math.round(state.modAmp * 100) + '%';
+    var r = regionFor(state.modAmp);
+    ampRegionEl.textContent = r.label;
+    ampRegionEl.className = 'pwm-sim-region' + (r.cls ? ' ' + r.cls : '');
+  }
+
+  // Canvas 2D helper: trace a rounded rectangle path (no fill/stroke).
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.arcTo(x + w, y, x + w, y + r, r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+    ctx.lineTo(x + r, y + h);
+    ctx.arcTo(x, y + h, x, y + h - r, r);
+    ctx.lineTo(x, y + r);
+    ctx.arcTo(x, y, x + r, y, r);
+  }
+
+  /* ───────────────────────────────────────────────────────────────────────
+     D. DRAW — main render routine
+     Called on every state change and every animation frame.
+     Layout inside the canvas:
+       ┌──────────── TOP PANEL ────────────┐   ← fundamental (sine) + carrier (triangle)
+       │                                   │
+       ├─────────────── gap ───────────────┤
+       ├──────────── BOT PANEL ────────────┤   ← PWM switched output + reconstructed sine
+       └───────────────────────────────────┘
+     ─────────────────────────────────────────────────────────────────────── */
+  function draw(p) {
+    p = p || 0; // Phase in [0..1]; 0 when static, animated when scrolling
+
+    // Convert backing-store pixels to CSS pixels via devicePixelRatio
+    var dpr = window.devicePixelRatio || 1;
+    var w = canvas.width  / dpr;
+    var h = canvas.height / dpr;
+
+    // Reset + apply DPR scaling for crisp HiDPI rendering
+    ctx.save();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.scale(dpr, dpr);
+
+    // ── Panel geometry ──
+    // Reserve vertical space for: header + legend at top, ms axis at bottom,
+    // and a modest middle gap (just enough for the ms tick labels).
+    var padTop = 26;
+    var padBot = 22;
+    var gapH   = 22;
+    var usableH = h - padTop - padBot - gapH;
+    var topH = usableH * 0.5;
+    var botH = usableH * 0.5;
+    var topCenter = padTop + topH / 2;
+    var botCenter = padTop + topH + gapH + botH / 2;
+    var topBottom = padTop + topH;
+    var botTop    = padTop + topH + gapH;
+
+    // ── Panel backgrounds (rounded rectangles) ──
+    ctx.fillStyle = '#f8faff';
+    ctx.beginPath(); roundRect(ctx, 0, padTop - 4, w, topH + 8, 8); ctx.fill();
+    ctx.beginPath(); roundRect(ctx, 0, botTop - 4, w, botH + 8, 8); ctx.fill();
+
+    // ── Zero-axis dashed lines (one per panel) ──
+    ctx.strokeStyle = '#e2e8f4';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(0, topCenter); ctx.lineTo(w, topCenter); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, botCenter); ctx.lineTo(w, botCenter); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // ── Signal parameters ──
+    var T = computeWindowSec();                      // Window width (seconds)
+    var carrierFreq = state.carrier;                 // Absolute Hz (user-set)
+    var carrierRatio = state.carrier / state.fund;   // Used only for phase offset in anim
+    var ampTop = topH * 0.42;
+    var ampBot = botH * 0.40;
+
+    // ── Carrier amplitude reference lines at ±1 (top panel) ──
+    // The carrier peak-to-peak defines the comparison window. When the sine
+    // crosses these lines we are in overmodulation, and it's now visually
+    // explicit instead of implicit.
+    ctx.strokeStyle = 'rgba(245, 158, 11, 0.35)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(0, topCenter - ampTop); ctx.lineTo(w, topCenter - ampTop);
+    ctx.moveTo(0, topCenter + ampTop); ctx.lineTo(w, topCenter + ampTop);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // ── Oversampled sampling ──
+    // 4 samples per canvas pixel to avoid aliasing on the high-freq carrier.
+    // Sine amplitude comes directly from state.modAmp (m_a = V_sine/V_tri).
+    var mod = state.modAmp;
+    var OVER = 4;
+    var N = Math.max(2, Math.ceil(w * OVER));
+    var samples = new Array(N);
+    for (var i = 0; i < N; i++) {
+      var xF   = (i / (N - 1)) * (w - 1);
+      var tt   = (i / (N - 1)) * T;
+      var sine = mod * Math.sin(2 * Math.PI * state.fund * tt + p * 2 * Math.PI);
+      var pp   = ((carrierFreq * tt) + p * carrierRatio) % 1;
+      if (pp < 0) pp += 1;
+      var tri  = 2 * Math.abs(2 * pp - 1) - 1;
+      samples[i] = { x: xF, sine: sine, tri: tri };
+    }
+
+    /* ── 0. VERTICAL GUIDE LINES at sine/carrier crossings ──
+       Drawn FIRST so waveforms render on top. Each line spans BOTH panels:
+       every crossing in the top panel is exactly where the PWM flips below. */
+    ctx.strokeStyle = 'rgba(5, 20, 100, 0.10)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 3]);
+    var prevSign = samples[0].sine > samples[0].tri ? 1 : -1;
+    for (var i = 1; i < N; i++) {
+      var sign = samples[i].sine > samples[i].tri ? 1 : -1;
+      if (sign !== prevSign) {
+        // Linear interpolation to find the exact crossing x between i-1 and i
+        var d0 = samples[i - 1].sine - samples[i - 1].tri;
+        var d1 = samples[i].sine     - samples[i].tri;
+        var frac = d0 / (d0 - d1);
+        var xCross = samples[i - 1].x + frac * (samples[i].x - samples[i - 1].x);
+        ctx.beginPath();
+        ctx.moveTo(xCross + 0.5, padTop);
+        ctx.lineTo(xCross + 0.5, botTop + botH);
+        ctx.stroke();
+        prevSign = sign;
+      }
+    }
+    ctx.setLineDash([]);
+
+    /* ── 1. CARRIER (triangle wave) — top panel, amber ──
+       Oversampled path gives clean straight edges even at high carrier freq. */
+    ctx.beginPath();
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 1.5;
+    for (var i = 0; i < N; i++) {
+      var y = topCenter - ampTop * samples[i].tri;
+      if (i === 0) ctx.moveTo(samples[i].x, y);
+      else         ctx.lineTo(samples[i].x, y);
+    }
+    ctx.stroke();
+
+    /* ── 2. FUNDAMENTAL (sine reference) — top panel, blue ── */
+    ctx.beginPath();
+    ctx.strokeStyle = '#0014DC';
+    ctx.lineWidth = 2.5;
+    for (var i = 0; i < N; i++) {
+      var y = topCenter - ampTop * samples[i].sine;
+      if (i === 0) ctx.moveTo(samples[i].x, y);
+      else         ctx.lineTo(samples[i].x, y);
+    }
+    ctx.stroke();
+
+    /* ── 3. PWM OUTPUT — bottom panel, green
+       Rule: output = +1 when sine > carrier, else −1.
+       Vertical edges inserted at every level flip → clean square wave. */
+    ctx.beginPath();
+    ctx.strokeStyle = '#22c55e';
+    ctx.lineWidth = 2;
+    var prevY = null;
+    for (var i = 0; i < N; i++) {
+      var pwm = samples[i].sine > samples[i].tri ? 1 : -1;
+      var y   = botCenter - ampBot * pwm;
+      if (i === 0) {
+        ctx.moveTo(samples[i].x, y);
+      } else {
+        if (prevY !== null && Math.abs(y - prevY) > 1) {
+          ctx.lineTo(samples[i].x, prevY);
+          ctx.lineTo(samples[i].x, y);
+        } else {
+          ctx.lineTo(samples[i].x, y);
+        }
+      }
+      prevY = y;
+    }
+    ctx.stroke();
+
+    /* ── 4. MS TIME AXIS ──
+       Ticks at the bottom of each panel + labels under the bottom panel. */
+    var Tms = T * 1000;
+    var tickMs = niceTickMs(Tms);
+    ctx.strokeStyle = '#cbd5ea';
+    ctx.lineWidth = 1;
+    ctx.fillStyle = '#8A9BC0';
+    ctx.font = "600 9px 'Plus Jakarta Sans', system-ui, sans-serif";
+    ctx.textAlign = 'center';
+    for (var ms = 0; ms <= Tms + 0.0001; ms += tickMs) {
+      var xPos = (ms / Tms) * w;
+      ctx.beginPath();
+      ctx.moveTo(xPos, topBottom + 4); ctx.lineTo(xPos, topBottom + 8);
+      ctx.moveTo(xPos, botTop + botH + 2); ctx.lineTo(xPos, botTop + botH + 6);
+      ctx.stroke();
+      var label = (Math.round(ms * 10) / 10) + ' ms';
+      ctx.fillText(label, Math.min(Math.max(xPos, 16), w - 16), botTop + botH + 16);
+    }
+    ctx.textAlign = 'left';
+
+    /* ── 5. HEADERS + LEGEND LABELS ── */
+    var fontSize = w < 360 ? 10 : (w < 600 ? 11 : 10);
+    ctx.font = "700 9px 'Plus Jakarta Sans', system-ui, sans-serif";
+    ctx.fillStyle = '#8A9BC0';
+    ctx.fillText('INPUTS', w - 54, padTop - 10);
+    ctx.fillText('OUTPUT', w - 54, botTop - 6);
+
+    ctx.font = "700 " + fontSize + "px 'Plus Jakarta Sans', system-ui, sans-serif";
+    var col2 = w < 360 ? 100 : (w < 600 ? 130 : 120);
+    ctx.fillStyle = '#0014DC';
+    ctx.fillText('● Fundamental', 8, padTop - 10);
+    ctx.fillStyle = '#f59e0b';
+    ctx.fillText('● Carrier', col2, padTop - 10);
+    ctx.fillStyle = '#22c55e';
+    ctx.fillText('● PWM output', 8, botTop - 6);
+
+    ctx.restore();
+  }
+
+  // Pick a human-friendly ms tick spacing so 4–8 ticks fit in the window.
+  function niceTickMs(totalMs) {
+    var candidates = [0.2, 0.5, 1, 2, 5, 10, 20];
+    for (var i = 0; i < candidates.length; i++) {
+      if (totalMs / candidates[i] <= 8) return candidates[i];
+    }
+    return 20;
+  }
+
+  /* ───────────────────────────────────────────────────────────────────────
+     E. RESIZE — recompute canvas backing store + re-draw
+     Called on window resize AND on wrapper size changes (ResizeObserver),
+     so it reflows even when the parent iframe is resized dynamically.
+     ─────────────────────────────────────────────────────────────────────── */
+  function resize() {
+    var dpr = window.devicePixelRatio || 1;
+
+    // Subtract wrapper paddings & borders to get the true drawable width
+    var style   = getComputedStyle(wrap);
+    var padL    = parseFloat(style.paddingLeft)  || 0;
+    var padR    = parseFloat(style.paddingRight) || 0;
+    var borderL = parseFloat(style.borderLeftWidth)  || 0;
+    var borderR = parseFloat(style.borderRightWidth) || 0;
+    var innerW  = Math.max(200, wrap.clientWidth - padL - padR - borderL - borderR);
+
+    canvasH = computeCanvasH();
+
+    // Backing store in device pixels, display size in CSS pixels
+    canvas.width        = innerW  * dpr;
+    canvas.height       = canvasH * dpr;
+    canvas.style.width  = innerW  + 'px';
+    canvas.style.height = canvasH + 'px';
+
+    draw(phase);
+  }
+
+  /* ───────────────────────────────────────────────────────────────────────
+     F. ANIMATION LOOP
+     Advances `phase` by ~0.3 cycles/sec and redraws on each frame.
+     Wraps phase back to 0 when it exceeds 1 to avoid unbounded growth.
+     ─────────────────────────────────────────────────────────────────────── */
+  function animLoop() {
+    var last = performance.now();
+    function step(now) {
+      var dt = (now - last) / 1000;
+      last = now;
+      phase += dt * 0.3;
+      if (phase > 1) phase -= 1;
+      draw(phase);
+      raf = requestAnimationFrame(step);
+    }
+    raf = requestAnimationFrame(step);
+  }
+
+  /* ───────────────────────────────────────────────────────────────────────
+     G. EVENT WIRING
+     Slider inputs update state + labels; a redraw is only forced when
+     the animation loop is NOT running (the loop already redraws each frame).
+     ─────────────────────────────────────────────────────────────────────── */
+  fundEl.addEventListener('input', function (e) {
+    state.fund = +e.target.value;
+    updateLabels();
+    if (!state.animated) draw(0);
+  });
+  ampEl.addEventListener('input', function (e) {
+    state.modAmp = +e.target.value / 100;
+    updateLabels();
+    if (!state.animated) draw(0);
+  });
+  carrierEl.addEventListener('input', function (e) {
+    state.carrier = +e.target.value;
+    updateLabels();
+    if (!state.animated) draw(0);
+  });
+
+  // Animate / Pause toggle
+  btnAnim.addEventListener('click', function () {
+    state.animated = !state.animated;
+    if (state.animated) {
+      btnAnim.classList.add('active');
+      btnAnim.textContent = '⏸ Pause';
+      animLoop();
+    } else {
+      btnAnim.classList.remove('active');
+      btnAnim.textContent = '▶ Animate';
+      if (raf) cancelAnimationFrame(raf);
+      phase = 0;
+      draw(0);
+    }
+  });
+
+  // Reset: restore defaults and stop animation
+  btnReset.addEventListener('click', function () {
+    state.fund = 50;
+    state.modAmp = 0.80;
+    state.carrier = 1500;
+    state.timebase = 'ms:40';
+    state.lastMsTb = 'ms:40';
+    fundEl.value = 50;
+    ampEl.value = 80;
+    carrierEl.value = 1500;
+    syncTimebaseUI();
+    if (state.animated) {
+      state.animated = false;
+      btnAnim.classList.remove('active');
+      btnAnim.textContent = '▶ Animate';
+      if (raf) cancelAnimationFrame(raf);
+    }
+    phase = 0;
+    updateLabels();
+    draw(0);
+  });
+
+  /* ───────────────────────────────────────────────────────────────────────
+     H. INITIALIZATION
+     ─────────────────────────────────────────────────────────────────────── */
+  // ── Time base: ms presets + "Lock 1 cycle" toggle switch ──
+  // When the lock is ON, ms preset buttons are visually disabled and the
+  // window is forced to exactly one fundamental period. Turning it OFF
+  // restores whichever ms preset was last active.
+  var tbBar = document.getElementById('tb');
+
+  function syncTimebaseUI() {
+    var msBtns = tbBar.querySelectorAll('.pwm-sim-tb-btn');
+    var isLocked = state.timebase === 'cycles:1';
+    lockEl.checked = isLocked;
+    for (var i = 0; i < msBtns.length; i++) {
+      msBtns[i].classList.toggle('disabled', isLocked);
+      msBtns[i].classList.toggle(
+        'active',
+        !isLocked && msBtns[i].getAttribute('data-tb') === state.timebase
+      );
+    }
+  }
+
+  // ms preset clicks (ignored while the lock toggle is ON — button is disabled)
+  tbBar.addEventListener('click', function (e) {
+    var ms = e.target.closest('.pwm-sim-tb-btn');
+    if (!ms || ms.classList.contains('disabled')) return;
+    state.timebase = ms.getAttribute('data-tb');
+    state.lastMsTb = state.timebase;
+    syncTimebaseUI();
+    if (!state.animated) draw(0);
+  });
+
+  // Lock 1 cycle toggle switch
+  lockEl.addEventListener('change', function () {
+    if (lockEl.checked) {
+      // Remember current ms preset so we can restore it on unlock
+      if (state.timebase.indexOf('ms:') === 0) state.lastMsTb = state.timebase;
+      state.timebase = 'cycles:1';
+    } else {
+      state.timebase = state.lastMsTb || 'ms:40';
+    }
+    syncTimebaseUI();
+    if (!state.animated) draw(0);
+  });
+
+
+  window.addEventListener('resize', resize);
+  // ResizeObserver catches iframe/container resizes that don't fire window resize
+  if (window.ResizeObserver) {
+    new ResizeObserver(resize).observe(wrap);
+  }
+  updateLabels();
+  resize();
+})();
+</script>
+</body>
+</html>
