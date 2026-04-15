@@ -4,6 +4,8 @@ A self-contained, interactive visualization of **Pulse-Width Modulation (PWM)**.
 
 Built as a single HTML file — no build step, no dependencies, no frameworks. Drop it anywhere.
 
+**Live demo:** https://ahuaranga.github.io/pwm-simulator-embed/
+
 ## Features
 
 - **Two-panel scope view**: top shows the fundamental (sine) against the carrier (triangle); bottom shows the resulting PWM output with the reconstructed sine overlay.
@@ -28,13 +30,16 @@ When amplitude exceeds 100%, the simulator enters the **overmodulation** region 
 
 ## Usage
 
+### Online
+Open the live demo: https://ahuaranga.github.io/pwm-simulator-embed/
+
 ### Standalone
-Open `pwm-simulator-embed.html` directly in any modern browser.
+Clone the repo and open `index.html` directly in any modern browser.
 
 ### Embedded
 ```html
 <iframe
-  src="pwm-simulator-embed.html"
+  src="https://ahuaranga.github.io/pwm-simulator-embed/"
   width="100%"
   height="560"
   style="border:0"
